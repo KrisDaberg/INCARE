@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>PDF Viewer</title>
+  <style>
+    :root { --maxw: 1200px; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+      background: #f6f7fb; color: #111827;
+      display: flex; flex-direction: column;
+    }
+    header {
+      max-width: var(--maxw); width: 100%; margin: 0 auto; padding: 10px 16px;
+      display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    }
+    header .title { font-weight: 600; margin-right: auto; }
+    .btn {
+      padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 10px; background:#fff; cursor:pointer;
+    }
+    .wrap {
+      max-width: var(--maxw); width: 100%; margin: 0 auto 14px; padding: 0 16px; box-sizing: border-box;
+      flex: 1; display: flex; gap: 12px;
+    }
+    /* Лёгкая боковая панель с миниатюрами */
+    .thumbs {
+      width: 160px; min-width: 160px; background:#fff; border:1px solid #e5e7eb; border-radius:12px;
+      overflow:auto; height: 90vh; padding: 8px;
+    }
+    .thumbs canvas { width: 100%; height: auto; display: block; margin-bottom: 8px; border-radius: 6px; }
+    .viewer {
+      flex: 1; background:#fff; border:1px solid #e5e7eb; border-radius:12px;
+      overflow:auto; height: 90vh; padding: 20px; box-sizing: border-box;
+    }
+    .page { margin: 0 auto 16px; box-shadow: 0 2px 6px rgba(0,0,0,.06); border-radius: 6px; overflow: hidden; }
+    .footer { text-align:center; font-size:12px; color:#6b7280; padding:6px 0 10px; }
+    @media (max-width: 900px) {
+      .thumbs { display:none; } /* на телефонах без миниатюр */
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="title">Просмотр PDF</div>
+    <button id="zoomOut" class="btn">−</button>
+    <span id="zoomVal" aria-live="polite">100%</span>
+    <button id="zoomIn" class="btn">+</button>
+    <a id="openRaw" class="btn" href="./practicum.pdf" target="_blank" rel="noopener">Открыть файл</a>
+  </header>
+
+  <div class="wrap">
+    <aside class="thumbs" id="thumbs"></aside>
+    <main class="viewer" id="viewer"></main>
+  </div>
+
+  <div class="footer">© INCARE</div>
+
+  <!-- PDF.js с CDNJS (стабильный CDN) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.5.136/pdf.min.js"></script>
+  <script>
+    // Путь к вашему PDF (лежит рядом с viewer.html)
+    const PDF_URL = './practicum.pdf';
+
+    // Настройка воркера PDF.js (обязательно!)
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.5.136/pdf.worker.min.js';
+
+    const viewer = document.getElementById('viewer');
+    const thumbs = document.getElementById('thumbs');
+    const zoomInBtn = document.getElementById('zoomIn');
+    const zoomOutBtn = document.getElementById('zoomOut');
+    const zoomVal = document.getElementById('zoomVal');
+
+    let pdfDoc = null;
+    let scale = 1.0; // базовый масштаб для рендера
+    const fitToWidth = () => {
+      // ширина области просмотра минус отступы
+      const containerWidth = viewer.clientWidth - 40;
+      // если есть первая страница, подгоняем по ширине её канваса
+      const firstCanvas = viewer.querySelector('canvas');
+      if (firstCanvas) {
+        const current = firstCanvas.width / scale;
+        scale = Math.max(0.4, Math.min(3, containerWidth / current));
+        zoomVal.textContent = Math.round(scale * 100) + '%';
+        rerenderAll();
+      }
+    };
+
+    const renderPage = async (num) => {
+      const page = await pdfDoc.getPage(num);
+      const viewport = page.getViewport({ scale });
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d', { alpha: false });
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      canvas.style.width = '100%';
+      canvas.style.height = 'auto';
+      const pageDiv = document.createElement('div');
+      pageDiv.className = 'page';
+      pageDiv.appendChild(canvas);
+      viewer.appendChild(pageDiv);
+
+      await page.render({ canvasContext: ctx, viewport }).promise;
+    };
+
+    const renderThumb = async (num) => {
+      const page = await pdfDoc.getPage(num);
+      const viewport = page.getViewport({ scale: 0.2 });
+      const c = document.createElement('canvas');
+      const ctx = c.getContext('2d');
+      c.width = viewport.width;
+      c.height = viewport.height;
+      await page.render({ canvasContext: ctx, viewport }).promise;
+      c.addEventListener('click', () => {
+        // прокрутить к соответствующей странице
+        const target = viewer.querySelectorAll('.page')[num - 1];
+        if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+      thumbs.appendChild(c);
+    };
+
+    const rerenderAll = async () => {
+      // перерисовать все страницы при изменении масштаба
+      const scrollTop = viewer.scrollTop;
+      viewer.innerHTML = '';
+      for (let n = 1; n <= pdfDoc.numPages; n++) {
+        await renderPage(n);
+      }
+      viewer.scrollTop = scrollTop;
+    };
+
+    const init = async () => {
+      const loadingTask = pdfjsLib.getDocument(PDF_URL);
+      pdfDoc = await loadingTask.promise;
+
+      // Миниатюры
+      thumbs.innerHTML = '';
+      for (let n = 1; n <= pdfDoc.numPages; n++) {
+        renderThumb(n); // не ждём по очереди — пусть грузятся параллельно
+      }
+
+      // Страницы
+      viewer.innerHTML = '';
+      for (let n = 1; n <= pdfDoc.numPages; n++) {
+        // последовательно, чтобы не «скакало»
+        // документ у вас небольшой — это быстро
+        // (если будут тяжёлые PDF, можно сделать ленивую подгрузку при прокрутке)
+        /* eslint-disable no-await-in-loop */
+        await renderPage(n);
+      }
+
+      fitToWidth();
+    };
+
+    zoomInBtn.addEventListener('click', () => {
+      scale = Math.min(4, scale + 0.1);
+      zoomVal.textContent = Math.round(scale * 100) + '%';
+      rerenderAll();
+    });
+    zoomOutBtn.addEventListener('click', () => {
+      scale = Math.max(0.3, scale - 0.1);
+      zoomVal.textContent = Math.round(scale * 100) + '%';
+      rerenderAll();
+    });
+    window.addEventListener('resize', () => {
+      // подгоняем ширину при ресайзе
+      fitToWidth();
+    });
+
+    init().catch(err => {
+      viewer.innerHTML = '<p style="padding:16px;color:#b91c1c">Ошибка загрузки PDF: ' + err.message + '</p>';
+    });
+  </script>
+</body>
+</html>
